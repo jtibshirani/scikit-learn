@@ -1268,7 +1268,7 @@ cdef class BinaryTree:
 
     def query(self, X, k=1, return_distance=True,
               dualtree=False, breadth_first=False,
-              sort_results=True):
+              sort_results=True, max_dist_comps=-1):
         """
         query(X, k=1, return_distance=True,
               dualtree=False, breadth_first=False)
@@ -1327,6 +1327,7 @@ cdef class BinaryTree:
         cdef DTYPE_t reduced_dist_LB
         cdef ITYPE_t i
         cdef DTYPE_t* pt
+        cdef ITYPE_t max_dist_comps_c = max_dist_comps
 
         # initialize heap for neighbors
         cdef NeighborsHeap heap = NeighborsHeap(Xarr.shape[0], k)
@@ -1358,14 +1359,14 @@ cdef class BinaryTree:
             pt = &Xarr[0, 0]
             if breadth_first:
                 for i in range(Xarr.shape[0]):
-                    self._query_single_breadthfirst(pt, i, heap, nodeheap)
+                    self._query_single_breadthfirst(pt, i, heap, nodeheap, max_dist_comps_c)
                     pt += Xarr.shape[1]
             else:
                 with nogil:
                     for i in range(Xarr.shape[0]):
                         reduced_dist_LB = min_rdist(self, 0, pt)
                         self._query_single_depthfirst(0, pt, i, heap,
-                                                      reduced_dist_LB)
+                                                      reduced_dist_LB, max_dist_comps_c)
                         pt += Xarr.shape[1]
 
         distances, indices = heap.get_arrays(sort=sort_results)
@@ -1777,7 +1778,8 @@ cdef class BinaryTree:
     cdef int _query_single_depthfirst(self, ITYPE_t i_node,
                                       DTYPE_t* pt, ITYPE_t i_pt,
                                       NeighborsHeap heap,
-                                      DTYPE_t reduced_dist_LB) nogil except -1:
+                                      DTYPE_t reduced_dist_LB,
+                                      ITYPE_t max_dist_comps) nogil except -1:
         """Recursive Single-tree k-neighbors query, depth-first approach"""
         cdef NodeData_t node_info = self.node_data[i_node]
 
@@ -1786,10 +1788,15 @@ cdef class BinaryTree:
 
         cdef DTYPE_t* data = &self.data[0, 0]
 
+        # ------------------------------------------------------------
+        # Case 0: we've already reached the candidate limit
+        if max_dist_comps > 0 and self.n_calls + self.n_splits >= max_dist_comps:
+            pass
+
         #------------------------------------------------------------
         # Case 1: query point is outside node radius:
         #         trim it from the query
-        if reduced_dist_LB > heap.largest(i_pt):
+        elif reduced_dist_LB > heap.largest(i_pt) :
             self.n_trims += 1
 
         #------------------------------------------------------------
@@ -1816,20 +1823,25 @@ cdef class BinaryTree:
             # recursively query subnodes
             if reduced_dist_LB_1 <= reduced_dist_LB_2:
                 self._query_single_depthfirst(i1, pt, i_pt, heap,
-                                              reduced_dist_LB_1)
+                                              reduced_dist_LB_1,
+                                              max_dist_comps)
                 self._query_single_depthfirst(i2, pt, i_pt, heap,
-                                              reduced_dist_LB_2)
+                                              reduced_dist_LB_2,
+                                              max_dist_comps)
             else:
                 self._query_single_depthfirst(i2, pt, i_pt, heap,
-                                              reduced_dist_LB_2)
+                                              reduced_dist_LB_2,
+                                              max_dist_comps)
                 self._query_single_depthfirst(i1, pt, i_pt, heap,
-                                              reduced_dist_LB_1)
+                                              reduced_dist_LB_1,
+                                              max_dist_comps)
         return 0
 
     cdef int _query_single_breadthfirst(self, DTYPE_t* pt,
                                         ITYPE_t i_pt,
                                         NeighborsHeap heap,
-                                        NodeHeap nodeheap) except -1:
+                                        NodeHeap nodeheap,
+                                        ITYPE_t max_dist_comps) except -1:
         """Non-recursive single-tree k-neighbors query, breadth-first search"""
         cdef ITYPE_t i, i_node
         cdef DTYPE_t dist_pt, reduced_dist_LB
@@ -1848,10 +1860,15 @@ cdef class BinaryTree:
             i_node = nodeheap_item.i1
             node_info = node_data[i_node]
 
+            # ------------------------------------------------------------
+            # Case 0: we've already reached the candidate limit
+            if max_dist_comps > 0 and self.n_calls + self.n_splits >= max_dist_comps:
+                pass
+
             #------------------------------------------------------------
             # Case 1: query point is outside node radius:
             #         trim it from the query
-            if reduced_dist_LB > heap.largest(i_pt):
+            elif reduced_dist_LB > heap.largest(i_pt):
                 self.n_trims += 1
 
             #------------------------------------------------------------
