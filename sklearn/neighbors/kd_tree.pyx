@@ -255,3 +255,81 @@ cdef inline DTYPE_t max_dist_dual(BinaryTree tree1, ITYPE_t i_node1,
     """Compute the maximum distance between two nodes"""
     return tree1.dist_metric._rdist_to_dist(max_rdist_dual(tree1, i_node1,
                                                            tree2, i_node2))
+
+
+######################################################################
+# kd-forest !
+
+import numpy as np
+import scipy as sp
+
+class KDForest():
+
+    def __init__(self, data, n_trees=1, leaf_size=40, **kwargs):
+        self.n_trees = n_trees
+        self.data = data
+        self.dist_metric = DistanceMetric.get_metric("minkowski", **kwargs)
+        self._dist_comps = 0
+
+        ortho_group = sp.stats.special_ortho_group
+
+        self.rotations = []
+        self.trees = []
+        for t in range(n_trees):
+            rotation = ortho_group.rvs(data.shape[1])
+            self.rotations.append(rotation)
+
+            data_rot = np.dot(data, rotation)
+            tree = KDTree(data_rot, tree_id=t, leaf_size=leaf_size)
+            self.trees.append(tree)
+
+    def query(self, X, k=1, sort_results=True, max_dist_comps=-1):
+        dim = self.data.shape[1]
+        X_rot = np.zeros((self.n_trees, dim))
+
+        for t in range(self.n_trees):
+            rotation = self.rotations[t]
+            X_rot[t,:] = np.dot(X, rotation)
+
+        cdef DTYPE_t[:, ::1] Xarr = get_memview_DTYPE_2D(X_rot)
+        cdef DTYPE_t* pt = &Xarr[0, 0]
+        cdef ITYPE_t pt_offset = 0
+
+        cdef NeighborsHeap heap = NeighborsHeap(1, k)
+        cdef NodeHeap nodeheap = NodeHeap(0)
+        cdef NodeHeapData_t root
+
+        dist_comps = 0
+
+        for t in range(self.n_trees):
+            tree = self.trees[t]
+            pt_offset = t * dim
+
+            root.tree_id = t
+            root.val = min_rdist(tree, 0, pt + pt_offset)
+            root.i1 = 0
+            root.i2 = 0
+
+            nodeheap.push(root)
+
+        dist_comps += self.n_trees
+
+        while nodeheap.n > 0 and (max_dist_comps < 0 or dist_comps < max_dist_comps):
+            nodeheap_item = nodeheap.pop()
+            t = nodeheap_item.tree_id
+            tree = self.trees[t]
+            pt_offset = t * dim
+
+            KDTree.visit_node(tree, pt + pt_offset, heap, nodeheap, nodeheap_item)
+
+            dist_comps += tree.get_n_calls() + tree.get_tree_stats()[2]
+            tree.reset_n_calls()
+
+        self._dist_comps = dist_comps
+
+        distances, indices = heap.get_arrays(sort=sort_results)
+        distances = self.dist_metric.rdist_to_dist(distances)
+        return distances, indices
+
+    def get_dist_comps(self):
+        return self._dist_comps

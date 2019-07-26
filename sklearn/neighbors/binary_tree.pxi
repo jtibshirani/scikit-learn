@@ -175,6 +175,7 @@ cdef DTYPE_t LOG_2PI = log(2 * PI)
 
 # Some compound datatypes used below:
 cdef struct NodeHeapData_t:
+    ITYPE_t tree_id
     DTYPE_t val
     ITYPE_t i1
     ITYPE_t i2
@@ -185,11 +186,12 @@ cdef struct NodeHeapData_t:
 #     cdef NodeHeapData_t nhd_tmp
 #     NodeHeapData = np.asarray(<NodeHeapData_t[:1]>(&nhd_tmp)).dtype
 cdef NodeHeapData_t nhd_tmp
-offsets = [<np.intp_t>&(nhd_tmp.val) - <np.intp_t>&nhd_tmp,
+offsets = [<np.intp_t>&(nhd_tmp.tree_id) - <np.intp_t>&nhd_tmp,
+           <np.intp_t>&(nhd_tmp.val) - <np.intp_t>&nhd_tmp,
            <np.intp_t>&(nhd_tmp.i1) - <np.intp_t>&nhd_tmp,
            <np.intp_t>&(nhd_tmp.i2) - <np.intp_t>&nhd_tmp]
-NodeHeapData = np.dtype({'names': ['val', 'i1', 'i2'],
-                         'formats': [DTYPE, ITYPE, ITYPE],
+NodeHeapData = np.dtype({'names': ['tree_id', 'val', 'i1', 'i2'],
+                         'formats': [ITYPE, DTYPE, ITYPE, ITYPE],
                          'offsets': offsets,
                          'itemsize': sizeof(NodeHeapData_t)})
 
@@ -627,6 +629,11 @@ cdef class NeighborsHeap:
         if val > dist_arr[0]:
             return 0
 
+        # avoid duplicate elements
+        for i in range(size):
+            if ind_arr[i] == i_val:
+                return 0
+
         # insert val at position zero
         dist_arr[0] = val
         ind_arr[0] = i_val
@@ -1021,6 +1028,7 @@ cdef class BinaryTree:
     cdef public NodeData_t[::1] node_data
     cdef public DTYPE_t[:, :, ::1] node_bounds
 
+    cdef ITYPE_t tree_id
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
     cdef ITYPE_t n_nodes
@@ -1063,7 +1071,11 @@ cdef class BinaryTree:
         self.n_calls = 0
 
     def __init__(self, data,
-                 leaf_size=40, metric='minkowski', sample_weight=None, **kwargs):
+                 tree_id=0,
+                 leaf_size=40,
+                 metric='minkowski',
+                 sample_weight=None,
+                 **kwargs):
         # validate data
         if data.size == 0:
             raise ValueError("X is an empty array")
@@ -1075,6 +1087,7 @@ cdef class BinaryTree:
         n_features = data.shape[1]
 
         self.data_arr = np.asarray(data, dtype=DTYPE, order='C')
+        self.tree_id = tree_id
         self.leaf_size = leaf_size
         self.dist_metric = DistanceMetric.get_metric(metric, **kwargs)
         self.euclidean = (self.dist_metric.__class__.__name__
@@ -1850,6 +1863,7 @@ cdef class BinaryTree:
 
         # Set up the node heap and push the head node onto it
         cdef NodeHeapData_t nodeheap_item
+        nodeheap_item.tree_id = self.tree_id
         nodeheap_item.val = min_rdist(self, 0, pt)
         nodeheap_item.i1 = 0
         nodeheap.push(nodeheap_item)
@@ -1888,9 +1902,55 @@ cdef class BinaryTree:
             else:
                 self.n_splits += 1
                 for i in range(2 * i_node + 1, 2 * i_node + 3):
+                    nodeheap_item.tree_id = self.tree_id
                     nodeheap_item.i1 = i
                     nodeheap_item.val = min_rdist(self, i, pt)
                     nodeheap.push(nodeheap_item)
+        return 0
+
+    cdef int visit_node(self, DTYPE_t* pt,
+                        NeighborsHeap heap,
+                        NodeHeap nodeheap,
+                        NodeHeapData_t nodeheap_item) except -1:
+        """Non-recursive single-tree k-neighbors query, breadth-first search"""
+        cdef ITYPE_t i, i_node
+        cdef DTYPE_t dist_pt, reduced_dist_LB
+        cdef NodeData_t* node_data = &self.node_data[0]
+        cdef DTYPE_t* data = &self.data[0, 0]
+
+        reduced_dist_LB = nodeheap_item.val
+        i_node = nodeheap_item.i1
+        node_info = node_data[i_node]
+
+        self.n_splits = 0
+
+        #------------------------------------------------------------
+        # Case 1: query point is outside node radius:
+        #         trim it from the query
+        if reduced_dist_LB > heap.largest(0):
+            self.n_trims += 1
+
+        #------------------------------------------------------------
+        # Case 2: this is a leaf node.  Update set of nearby points
+        elif node_data[i_node].is_leaf:
+            self.n_leaves += 1
+            for i in range(node_data[i_node].idx_start,
+                           node_data[i_node].idx_end):
+                dist_pt = self.rdist(pt,
+                                     &self.data[self.idx_array[i], 0],
+                                     self.data.shape[1])
+                if dist_pt < heap.largest(0):
+                    heap._push(0, dist_pt, self.idx_array[i])
+
+        #------------------------------------------------------------
+        # Case 3: Node is not a leaf.  Add subnodes to the node heap
+        else:
+            self.n_splits += 1
+            for i in range(2 * i_node + 1, 2 * i_node + 3):
+                nodeheap_item.tree_id = self.tree_id
+                nodeheap_item.i1 = i
+                nodeheap_item.val = min_rdist(self, i, pt)
+                nodeheap.push(nodeheap_item)
         return 0
 
     cdef int _query_dual_depthfirst(self, ITYPE_t i_node1,

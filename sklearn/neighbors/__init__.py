@@ -4,6 +4,7 @@ algorithm.
 """
 
 from .ball_tree import BallTree
+from .kd_tree import KDForest
 from .kd_tree import KDTree
 from .dist_metrics import DistanceMetric
 from .graph import kneighbors_graph, radius_neighbors_graph
@@ -18,6 +19,7 @@ from .base import VALID_METRICS, VALID_METRICS_SPARSE
 
 __all__ = ['BallTree',
            'DistanceMetric',
+           'KDForest',
            'KDTree',
            'KNeighborsClassifier',
            'KNeighborsRegressor',
