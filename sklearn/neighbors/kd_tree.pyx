@@ -263,6 +263,8 @@ cdef inline DTYPE_t max_dist_dual(BinaryTree tree1, ITYPE_t i_node1,
 import numpy as np
 import scipy as sp
 
+from cpython cimport set
+
 class KDForest():
 
     def __init__(self, data, n_trees=1, leaf_size=40, **kwargs):
@@ -298,6 +300,7 @@ class KDForest():
         cdef NeighborsHeap heap = NeighborsHeap(1, k)
         cdef NodeHeap nodeheap = NodeHeap(0)
         cdef NodeHeapData_t root
+        cdef set visited = set()
 
         dist_comps = 0
 
@@ -320,7 +323,7 @@ class KDForest():
             tree = self.trees[t]
             pt_offset = t * dim
 
-            KDTree.visit_node(tree, pt + pt_offset, heap, nodeheap, nodeheap_item)
+            KDTree.visit_node(tree, pt + pt_offset, heap, nodeheap, nodeheap_item, visited)
 
             dist_comps += tree.get_n_calls() + tree.get_tree_stats()[2]
             tree.reset_n_calls()

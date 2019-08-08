@@ -1911,7 +1911,8 @@ cdef class BinaryTree:
     cdef int visit_node(self, DTYPE_t* pt,
                         NeighborsHeap heap,
                         NodeHeap nodeheap,
-                        NodeHeapData_t nodeheap_item) except -1:
+                        NodeHeapData_t nodeheap_item,
+                        set visited) except -1:
         """Non-recursive single-tree k-neighbors query, breadth-first search"""
         cdef ITYPE_t i, i_node
         cdef DTYPE_t dist_pt, reduced_dist_LB
@@ -1936,12 +1937,18 @@ cdef class BinaryTree:
             self.n_leaves += 1
             for i in range(node_data[i_node].idx_start,
                            node_data[i_node].idx_end):
+
+                index = self.idx_array[i]
+                if index in visited:
+                    continue
+
                 dist_pt = self.rdist(pt,
-                                     &self.data[self.idx_array[i], 0],
+                                     &self.data[index, 0],
                                      self.data.shape[1])
                 if dist_pt < heap.largest(0):
-                    heap._push(0, dist_pt, self.idx_array[i])
+                    heap._push(0, dist_pt, index)
 
+                visited.add(index)
         #------------------------------------------------------------
         # Case 3: Node is not a leaf.  Add subnodes to the node heap
         else:
